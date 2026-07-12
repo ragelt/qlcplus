@@ -114,3 +114,92 @@ jobs:
         with:
           name: QLCplus5-Windows
           path: QLCplus5-*.exe
+
+  build-macos-arm64-v5:
+    runs-on: macos-15
+
+    env:
+      QT_VERSION: "6.10.2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set variables
+        shell: bash
+        run: |
+          echo "QTDIR=${{ github.workspace }}/qt/Qt/${{ env.QT_VERSION }}/macos" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u '+%Y%m%d')" >> $GITHUB_ENV
+          echo "GIT_REV=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "NPROC=$(sysctl -n hw.ncpu)" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          brew update
+          brew install fftw mad libsndfile libftdi
+          brew link --overwrite python@3.13
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: mac
+          target: desktop
+          arch: clang_64
+          dir: "${{ github.workspace }}/qt/"
+          modules: "qt3d qtimageformats qtmultimedia qtserialport qtwebsockets"
+
+      - name: Configure QLC+ 5 ARM64
+        shell: bash
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ env.QTDIR }}/lib/cmake" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -Dqmlui=ON
+
+      - name: Build
+        shell: bash
+        run: |
+          sed -i '' "s/\(#define APPVERSION \".*\)\"/\1 ${{ env.GIT_REV }}\"/" engine/src/qlcconfig.h
+          cmake --build build --parallel "${{ env.NPROC }}"
+
+      - name: Install application bundle
+        shell: bash
+        run: |
+          cmake --build build --target install --parallel "${{ env.NPROC }}"
+
+      - name: Deploy libraries
+        shell: bash
+        run: |
+          platforms/macos/fix_dylib_deps.sh "$HOME/QLC+.app/Contents/Frameworks/libsndfile.1.dylib"
+          platforms/macos/fix_dylib_deps.sh "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
+          "${{ env.QTDIR }}/bin/macdeployqt" "$HOME/QLC+.app" -qmldir=qmlui/qml
+
+      - name: Create DMG
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 30
+          max_attempts: 12
+          retry_wait_seconds: 1
+          command: |
+            OUTDIR=$PWD
+            cd platforms/macos/dmg
+            ./create-dmg --volname "Q Light Controller Plus" \
+              --volicon "$OUTDIR/resources/icons/qlcplus.icns" \
+              --background background.png \
+              --window-size 400 300 \
+              --window-pos 200 100 \
+              --icon-size 64 \
+              --icon "QLC+" 0 150 \
+              --app-drop-link 200 150 \
+              "$OUTDIR/QLCplus5-macOS-arm64-${{ env.BUILD_DATE }}-${{ env.GIT_REV }}.dmg" \
+              "$HOME/QLC+.app"
+
+      - name: Upload macOS ARM64 DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: QLCplus5-macOS-arm64
+          path: QLCplus5-macOS-arm64-*.dmg
