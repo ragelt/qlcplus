@@ -1,10 +1,11 @@
-name: QLCplus Windows QLC+5 Build
+name: QLC+ 5 Build
 
 on:
   workflow_dispatch:
 
 jobs:
   build-windows-v5:
+    name: QLC+ 5 Windows x64
     runs-on: windows-latest
 
     env:
@@ -45,6 +46,7 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-libs
             mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
             mingw-w64-x86_64-libmad
             mingw-w64-x86_64-libsndfile
             mingw-w64-x86_64-flac
@@ -52,17 +54,28 @@ jobs:
             mingw-w64-x86_64-libusb
             mingw-w64-x86_64-python-lxml
             mingw-w64-x86_64-nsis
+            mingw-w64-x86_64-tools
 
       - name: Prepare D2XX SDK
         shell: msys2 {0}
         run: |
           mkdir -p /c/projects/D2XXSDK
-          wget https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip -O /c/projects/D2XXSDK/cdm.zip
+
+          wget \
+            https://qlcplus.org/misc/CDM-v2.12.36.20-WHQL-Certified.zip \
+            -O /c/projects/D2XXSDK/cdm.zip
+
           cd /c/projects/D2XXSDK
-          unzip cdm.zip
+          unzip -o cdm.zip
+
           cd amd64
-          gendef.exe - ftd2xx64.dll > ftd2xx.def
-          dlltool -k --input-def ftd2xx.def --dllname ftd2xx64.dll --output-lib libftd2xx.a
+
+          gendef.exe ftd2xx64.dll
+          dlltool \
+            -k \
+            --input-def ftd2xx64.def \
+            --dllname ftd2xx64.dll \
+            --output-lib libftd2xx.a
 
       - name: Patch Windows build files
         shell: msys2 {0}
@@ -75,7 +88,10 @@ jobs:
       - name: Configure QLC+ 5
         shell: msys2 {0}
         run: |
-          cmake -S . -B build \
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${{ env.QTDIR }}/lib/cmake" \
             -Dqmlui=ON
@@ -83,39 +99,60 @@ jobs:
       - name: Build
         shell: msys2 {0}
         run: |
-          sed -i "s/\(#define APPVERSION \".*\)\"/\1 ${{ env.GIT_REV }}\"/" engine/src/qlcconfig.h
-          cd build
-          ninja
+          sed -i \
+            "s/\(#define APPVERSION \".*\)\"/\1 ${{ env.GIT_REV }}\"/" \
+            engine/src/qlcconfig.h
+
+          cmake \
+            --build build \
+            --parallel
 
       - name: Install
         shell: msys2 {0}
         run: |
-          cd build
-          ninja install
+          cmake \
+            --build build \
+            --target install
 
       - name: Deploy Qt libraries
         shell: msys2 {0}
         run: |
           SRC_DIR=$PWD
+
           ./translate.sh release qmlui
           cp *.qm /c/qlcplus
-          cd /c/qlcplus
-          "${{ env.QTDIR }}/bin/windeployqt" --qmldir "$SRC_DIR/qmlui/qml" qlcplus-qml.exe qlcplusengine.dll plugins/dmxusb.dll
 
-      - name: Build installer
+          cd /c/qlcplus
+
+          "${{ env.QTDIR }}/bin/windeployqt" \
+            --qmldir "$SRC_DIR/qmlui/qml" \
+            qlcplus-qml.exe \
+            qlcplusengine.dll \
+            plugins/dmxusb.dll
+
+      - name: Build Windows installer
         shell: msys2 {0}
         run: |
           cd /c/qlcplus
-          makensis -X'SetCompressor /FINAL lzma' qlcplus5Qt6.nsi
-          mv "/c/qlcplus/${{ env.OUTFILE }}" "${{ github.workspace }}/QLCplus5-${{ env.BUILD_DATE }}-${{ env.GIT_REV }}.exe"
 
-      - name: Upload installer
+          makensis \
+            -X'SetCompressor /FINAL lzma' \
+            qlcplus5Qt6.nsi
+
+          mv \
+            "/c/qlcplus/${{ env.OUTFILE }}" \
+            "${{ github.workspace }}/QLCplus5-Windows-${{ env.BUILD_DATE }}-${{ env.GIT_REV }}.exe"
+
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
           name: QLCplus5-Windows
-          path: QLCplus5-*.exe
+          path: QLCplus5-Windows-*.exe
+          if-no-files-found: error
+
 
   build-macos-arm64-v5:
+    name: QLC+ 5 macOS ARM64
     runs-on: macos-15
 
     env:
@@ -137,8 +174,14 @@ jobs:
         shell: bash
         run: |
           brew update
-          brew install fftw mad libsndfile libftdi
-          brew link --overwrite python@3.13
+          brew install \
+            cmake \
+            ninja \
+            fftw \
+            mad \
+            libsndfile \
+            libftdi \
+            pkg-config
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -153,7 +196,10 @@ jobs:
       - name: Configure QLC+ 5 ARM64
         shell: bash
         run: |
-          cmake -S . -B build \
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${{ env.QTDIR }}/lib/cmake" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -163,31 +209,160 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          sed -i '' "s/\(#define APPVERSION \".*\)\"/\1 ${{ env.GIT_REV }}\"/" engine/src/qlcconfig.h
-          cmake --build build --parallel "${{ env.NPROC }}"
+          sed -i '' \
+            "s/\(#define APPVERSION \".*\)\"/\1 ${{ env.GIT_REV }}\"/" \
+            engine/src/qlcconfig.h
+
+          cmake \
+            --build build \
+            --parallel "${{ env.NPROC }}"
 
       - name: Install application bundle
         shell: bash
         run: |
-          cmake --build build --target install --parallel "${{ env.NPROC }}"
+          cmake \
+            --build build \
+            --target install \
+            --parallel "${{ env.NPROC }}"
 
-      - name: Deploy libraries
+      - name: Verify application bundle exists
         shell: bash
         run: |
-          platforms/macos/fix_dylib_deps.sh "$HOME/QLC+.app/Contents/Frameworks/libsndfile.1.dylib"
-          platforms/macos/fix_dylib_deps.sh "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
-          "${{ env.QTDIR }}/bin/macdeployqt" "$HOME/QLC+.app" -qmldir=qmlui/qml
+          test -d "$HOME/QLC+.app"
+          test -f "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
+
+          file "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
+
+      - name: Fix dylib dependencies
+        shell: bash
+        run: |
+          if [ -f "$HOME/QLC+.app/Contents/Frameworks/libsndfile.1.dylib" ]; then
+            platforms/macos/fix_dylib_deps.sh \
+              "$HOME/QLC+.app/Contents/Frameworks/libsndfile.1.dylib"
+          fi
+
+          platforms/macos/fix_dylib_deps.sh \
+            "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
+
+      - name: Deploy Qt libraries
+        shell: bash
+        run: |
+          "${{ env.QTDIR }}/bin/macdeployqt" \
+            "$HOME/QLC+.app" \
+            -qmldir=qmlui/qml \
+            -verbose=2
+
+      - name: Remove existing signatures
+        shell: bash
+        run: |
+          find "$HOME/QLC+.app" \
+            -type f \
+            -perm -111 \
+            -print0 | while IFS= read -r -d '' file; do
+              codesign --remove-signature "$file" 2>/dev/null || true
+            done
+
+          find "$HOME/QLC+.app/Contents" \
+            -type f \
+            \( -name "*.dylib" -o -name "*.so" \) \
+            -print0 | while IFS= read -r -d '' file; do
+              codesign --remove-signature "$file" 2>/dev/null || true
+            done
+
+          codesign \
+            --remove-signature \
+            "$HOME/QLC+.app" 2>/dev/null || true
+
+      - name: Ad-hoc sign nested binaries
+        shell: bash
+        run: |
+          find "$HOME/QLC+.app/Contents" \
+            -type f \
+            \( \
+              -name "*.dylib" \
+              -o -name "*.so" \
+              -o -perm -111 \
+            \) \
+            -print0 | while IFS= read -r -d '' file; do
+              if file "$file" | grep -q "Mach-O"; then
+                codesign \
+                  --force \
+                  --sign - \
+                  --timestamp=none \
+                  "$file"
+              fi
+            done
+
+      - name: Ad-hoc sign frameworks
+        shell: bash
+        run: |
+          find "$HOME/QLC+.app/Contents/Frameworks" \
+            -depth \
+            -type d \
+            -name "*.framework" \
+            -print0 | while IFS= read -r -d '' framework; do
+              codesign \
+                --force \
+                --sign - \
+                --timestamp=none \
+                "$framework"
+            done
+
+      - name: Ad-hoc sign application
+        shell: bash
+        run: |
+          codesign \
+            --force \
+            --deep \
+            --sign - \
+            --timestamp=none \
+            "$HOME/QLC+.app"
+
+      - name: Verify application signature
+        shell: bash
+        run: |
+          codesign \
+            --verify \
+            --deep \
+            --strict \
+            --verbose=4 \
+            "$HOME/QLC+.app"
+
+          codesign \
+            --display \
+            --verbose=4 \
+            "$HOME/QLC+.app"
+
+      - name: Verify ARM64 architecture
+        shell: bash
+        run: |
+          lipo \
+            -info \
+            "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
+
+          file \
+            "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml"
+
+      - name: Test application launch
+        shell: bash
+        run: |
+          "$HOME/QLC+.app/Contents/MacOS/qlcplus-qml" \
+            --platform offscreen \
+            --version
 
       - name: Create DMG
         uses: nick-fields/retry@v4
         with:
           timeout_minutes: 30
           max_attempts: 12
-          retry_wait_seconds: 1
+          retry_wait_seconds: 2
           command: |
-            OUTDIR=$PWD
+            OUTDIR="$PWD"
+
             cd platforms/macos/dmg
-            ./create-dmg --volname "Q Light Controller Plus" \
+
+            ./create-dmg \
+              --volname "Q Light Controller Plus" \
               --volicon "$OUTDIR/resources/icons/qlcplus.icns" \
               --background background.png \
               --window-size 400 300 \
@@ -198,8 +373,15 @@ jobs:
               "$OUTDIR/QLCplus5-macOS-arm64-${{ env.BUILD_DATE }}-${{ env.GIT_REV }}.dmg" \
               "$HOME/QLC+.app"
 
-      - name: Upload macOS ARM64 DMG
+      - name: Verify DMG exists
+        shell: bash
+        run: |
+          ls -lh QLCplus5-macOS-arm64-*.dmg
+          hdiutil verify QLCplus5-macOS-arm64-*.dmg
+
+      - name: Upload macOS ARM64 artifact
         uses: actions/upload-artifact@v7
         with:
           name: QLCplus5-macOS-arm64
           path: QLCplus5-macOS-arm64-*.dmg
+          if-no-files-found: error
